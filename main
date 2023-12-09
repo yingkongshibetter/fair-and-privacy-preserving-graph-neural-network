@@ -1,3 +1,7 @@
+from args import get_citation_args
+import torch
+import torch.nn.functional as F
+import torch.optim as optim
 args = get_citation_args()
 def simi(output):  
     a = output.norm(dim=1)[:, None]
@@ -19,11 +23,127 @@ def train(epoch, model_name, adj, flag=0):
     else:
         loss_train.backward()
         optimizer.step()
-    return output1.
+    return output1
+
+def train_fair_accuracy (features, adj, output1, Alpha, Beta, Garma, TopK):
+    model.train()
+    optimizer.zero_grad()
+    y_similarity = simi(output1[idx_train])
+    x_similarity = simi(features[idx_train])
+    (x_sorted_scores, x_sorted_idxs) = x_similarity.sort(dim=1, descending=True)
+    prod = torch.ones(1).cuda()
+    bs = y_similarity.shape[0]
+    rel_k = torch.zeros(bs, top_k)
+    alpha = Alpha
+    for k in range(TopK):
+        B_ = alpha * y_similarity * prod  #
+        maxB_, _ = torch.max(B_, -1)
+        diff_B = (B_.t() - maxB_).t()
+        approx_inds = torch.softmax(diff_B, -1)  # rank indicator estimate
+        rel_k[:, k] = torch.sum(x_similarity.cuda() * approx_inds.cuda(), -1)
+        prod = prod * (1 - approx_inds - 0.5)
+    c = 2 * torch.ones_like(x_sorted_scores[:, :top_k])
+    numerator = c.pow(x_sorted_scores[:, :top_k]) - 1
+    denominator = torch.log2(2 + torch.arange(x_sorted_scores[:, :top_k].shape[1], dtype=torch.float)).repeat(
+        x_sorted_scores.shape[0], 1).cuda()
+    idcg = torch.sum((numerator / denominator), 1)
+    dcg = discounted_cum_gain(rel_k.cuda())
+    ndcg = dcg / idcg  # NDCG@K_{q}^{alpha}
+    nd_loss=torch.sum(1-ndcg)/bs
+    h=model.body(features,adj)
+    s_g = adv(h)[idx_train]
+    a_loss = F.cross_entropy(s_g, ss[idx_train].cuda())
+    loss_train = F.cross_entropy(output1[idx_train], labels[idx_train])+Beta*nd_loss+Garma*(1-a_loss)
+    acc_train = accuracy(output1[idx_train], labels[idx_train])
+    loss_train.backward()
+    optimizer.step()
+
+if args.dataset=='credit':
+
+    dataset = 'credit'
+    sens_attr = 'Age'
+    predict_attr = 'NoDefaultNextMonth'
+    path = "../dataset/credit/"
+    adj, features, labels, sens = load_credit(dataset, sens_attr, predict_attr, path=path)  # label: 0 1
+    sen_attr_index = 2
+elif args.dataset=='german':
+    dataset = 'german'
+    sens_attr = 'Gender'
+    predict_attr = "GoodCustomer"
+    path = "../dataset/german/"
+    adj, features, labels, sens = load_german(dataset, sens_attr, predict_attr, path=path)  # label: 0 1
+    sen_attr_index = 0
+elif args.dataset=='bail':
+    dataset = 'bail'
+    sens_attr = 'WHITE'
+    predict_attr = "RECID"
+    path = "../dataset/bail/"
+    adj, features, labels, sens = load_bail(dataset, sens_attr, predict_attr, path=path)  # label: 0 1
+    sen_attr_index = 0
+
+idx_train, idx_val, idx_test = get_train_val_test(features, val_size=0.2, test_size=0.5, seed=50)
+idx_train = torch.from_numpy(idx_train)
+idx_val = torch.from_numpy(idx_val)
+idx_test = torch.from_numpy(idx_test)
+adj, features, labels = data_preprocess(adj, csr_matrix(features), labels, preprocess_adj=True, preprocess_feature=True, device=device)
+idx_sensitive, idx_nosensitive = split_train(idx_train, sensitive_size=args.sens_size, nosensitive_size=1-sens_size, seed=200)
+coo = adj.tocoo()
+indices = torch.from_numpy(np.vstack((coo.row, coo.col)).astype(np.int64))
+values = torch.from_numpy(coo.data.astype(np.int64))
+edge_index = torch.sparse_coo_tensor(indices, values, (features.shape[0], features.shape[0])).coalesce().indices()
+adj = edge_index.cuda()   
+if args.cuda:
+    features = features.cuda()
+    adj = adj.cuda()
+    labels = labels.cuda()
+    idx_train = idx_train.cuda()
+    idx_val = idx_val.cuda()
+    idx_test = idx_test.cuda()
+feature_temp = features.clone()
+feature_temp = torch.cat((feature_temp[:, 0:sen_attr_index], feature_temp[:, sen_attr_index + 1:]), 1)
+adv_infer = GCN(nfeat=feature_temp.size(1), nhid=args.hidden, nclass=2, dropout=args.dropout).cuda()
+optimizer_adv_infer = optim.Adam(adv_infer.parameters(), lr=0.01, weight_decay=args.weight_decay)
+for i in range(args.epoch3):
+    adv_infer.train()
+    # adv.requires_grad_(True)
+    optimizer_adv_infer.zero_grad()
+    s_g = adv_infer(feature_temp ,adj)[idx_sensitive]
+
+    # ss_g=torch.matmul(s_g,dataT)
+    a_loss =F.cross_entropy(s_g, sens.cuda()[idx_sensitive])
+    a_loss.backward()
+    optimizer_adv_infer.step()
+adv_infer.eval()
+y_pred = adv_infer(feature_temp,adj)
+y_pred=y_pred.detach()
+preds = y_pred.max(1)[1].type_as(labels)
+ss=sens.clone().cuda()
+ss[idx_nosensitive]=preds[idx_nosensitive].cuda()
+features[:, sen_attr_index][idx_nosensitive]=preds[idx_nosensitive].float()
+model = get_model(args.model, features.size(1), labels.max().item() + 1, args.hidden, args.dropout, args.cuda)
+optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+for epoch in range(args.epoch1):
+    output = train(epoch, features, adj, 1)
+
+for epoch in range(args.epoch2):
+    output = train(epoch, features, adj, 1)
+    for i in range(args.epoch3):
+        h = model.body(features, adj)
+        adv.train()
+        optimizer_adv.zero_grad()
+        s_g = adv(h.detach())[idx_train]
+        a_loss = F.cross_entropy(s_g, ss[idx_train])
+        a_loss.backward()
+        optimizer_adv.step()
+    train_fair_accuracy(features, adj, output, args.Alpha, args.Beta, args.Garma, args.Topk)
+model.eval()
+output = model(features, adj)
+y_similarity = simi(output[idx_test])
+x_similarity = simi(features[idx_test])
+print("NDCG", )
+print("ERR", )
+print("Accuracy",)
+print("Privacy_acc",)
 
 
-for epoch in range(epoch):
-  output = train(epoch, features, adj, 1)
-
-for 
-  
