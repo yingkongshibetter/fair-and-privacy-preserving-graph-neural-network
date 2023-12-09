@@ -1,7 +1,11 @@
 from args import get_citation_args
+from models import get_model
+from models import GCN
+import metrics
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+from data_loader.feature_utils import  load_credit,load_german,load_bail
 args = get_citation_args()
 def simi(output):  
     a = output.norm(dim=1)[:, None]
@@ -139,11 +143,12 @@ for epoch in range(args.epoch2):
     train_fair_accuracy(features, adj, output, args.Alpha, args.Beta, args.Garma, args.Topk)
 model.eval()
 output = model(features, adj)
+embedding=model.body(features,adj)
 y_similarity = simi(output[idx_test])
 x_similarity = simi(features[idx_test])
-print("NDCG", )
-print("ERR", )
-print("Accuracy",)
-print("Privacy_acc",)
+print("NDCG", metrics.NDCG(output[idx_test],features[idx_test]))
+print("ERR", metrics.ERR(output[idx_test],features[idx_test]))
+print("Accuracy",metrics.accuracy(output[idx_test],labels[idx_test]))
+print("Privacy_acc",metrics.accuracy(embedding,args.epoch3,sens,idx_sensitive,idx_nosensitive))
 
 
