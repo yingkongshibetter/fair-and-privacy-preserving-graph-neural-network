@@ -1,0 +1,29 @@
+args = get_citation_args()
+def simi(output):  
+    a = output.norm(dim=1)[:, None]
+    the_ones = torch.ones_like(a)
+    a = torch.where(a==0, the_ones, a)
+    a_norm = output / a
+    b_norm = output / a
+    res = 5 * (torch.mm(a_norm, b_norm.transpose(0, 1)) + 1)
+    return res
+def train(epoch, model_name, adj, flag=0):
+    t = time.time()
+    model.train()
+    optimizer.zero_grad()
+    output1 = model(features, adj)
+    loss_train = F.cross_entropy(output1[idx_train], labels[idx_train])
+    acc_train = accuracy(output1[idx_train], labels[idx_train])
+    if flag == 0:
+        loss_train.backward(retain_graph=True)
+    else:
+        loss_train.backward()
+        optimizer.step()
+    return output1.
+
+
+for epoch in range(epoch):
+  output = train(epoch, features, adj, 1)
+
+for 
+  
