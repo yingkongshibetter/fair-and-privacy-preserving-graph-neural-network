@@ -5,7 +5,7 @@ import metrics
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-from data_loader.feature_utils import  load_credit,load_german,load_bail
+from data_loader import  load_credit,load_german,load_bail
 args = get_citation_args()
 def simi(output):  
     a = output.norm(dim=1)[:, None]
